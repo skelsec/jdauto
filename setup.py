@@ -46,9 +46,10 @@ setup(
 		"Operating System :: OS Independent",
 	),
 	install_requires=[
+		'multiplexor>=0.0.8',
 		'jackdaw>=0.2.6',
         'aiosmb>=0.2.11',
-        'msldap',
+        'msldap>=0.2.14',
 		'pypykatz>=0.3.9',
 	],
 	entry_points={

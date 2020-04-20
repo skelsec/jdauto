@@ -51,9 +51,9 @@ setup(
         'msldap',
 		'pypykatz>=0.3.9',
 	],
-	#entry_points={
-	#	'console_scripts': [
-	#		'jdauto = XXXX',
-	#	],
-	#}
+	entry_points={
+		'console_scripts': [
+			'jdauto = jdauto.jdauto:main',
+		],
+	}
 )

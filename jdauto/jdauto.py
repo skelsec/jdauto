@@ -1,4 +1,9 @@
 import asyncio
+import shutil
+import os
+import subprocess
+import shlex
+from pathlib import Path
 
 from multiplexor.operator import MultiplexorOperator
 from multiplexor.logger.logger import mpexception, Logger
@@ -37,9 +42,6 @@ class JackdawAutoCollect:
 		self.smbenum = None
 		self.smbenum_task = None
 
-	def setup_db(self):
-		create_db(self.db_conn)
-
 	def get_domain_server(self):
 		domains_raw = self.agentinfo.get('domains')
 		domains = domains_raw.split(' | ')
@@ -74,11 +76,10 @@ class JackdawAutoCollect:
 			self.ldapenum = LDAPEnumeratorManager(self.db_conn, ldap_mgr, agent_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
 			logging.info('Enumerating LDAP')
 			self.ldapenum_task = asyncio.create_task(self.ldapenum.run())
-			try:
-				adifo_id = await self.ldapenum_task
-			except asyncio.CancelledError:
-				return
-
+			
+			adifo_id = await self.ldapenum_task
+			if adifo_id is None:
+				raise Exception('LDAP enumeration failed!')
 			logging.info('ADInfo entry successfully created with ID %s' % adifo_id)
 			
 			logging.info('Enumerating SMB')
@@ -88,10 +89,7 @@ class JackdawAutoCollect:
 			self.smbenum.target_ad = adifo_id
 			self.smbenum_task = asyncio.create_task(self.smbenum.run())
 
-			try:
-				await self.smbenum_task
-			except asyncio.CancelledError:
-				return
+			await self.smbenum_task
 
 			return True
 		except:
@@ -100,7 +98,6 @@ class JackdawAutoCollect:
 
 	async def run(self):
 		self.domain_server = self.get_domain_server()
-		self.setup_db()
 		if self.domain_server is None:
 			logging.exception('Failed to get domain server!')
 		
@@ -112,21 +109,51 @@ class JackdawAutoCollect:
 			
 
 class MultiplexorAutoStart(MultiplexorOperator):
-	def __init__(self, connection_string, db_conn, logger = None, parallel_cnt = None, progress_queue = None):
+	def __init__(self, connection_string, sqlite_folder_path, logger = None, parallel_cnt = None, progress_queue = None, progress_file_name = None, start_ui = False):
 		MultiplexorOperator.__init__(self, connection_string, logger = logger)
 		self.progress_queue = progress_queue
+		self.progress_file_name = progress_file_name
 		self.agent_tracker = {} #agentid -> info
 		self.agent_info_tracker = {} #info -> agentid
 		self.collection_tasks = {} #agentid -> (collection_task, collect obj)
 		self.plugin_tracker = {}
-		self.db_conn = db_conn
-		#self.scan_q = scan_q
+		#self.db_conn = db_conn
+		self.sqlite_folder_path = sqlite_folder_path
 		self.parallel_cnt = None
+		self.sqlite_progress_folder = None
+		self.sqlite_finished_folder = None
+		self.start_ui = start_ui
 
-	#async def check_progress(self):
-	#	while True:
-	#		res = await self.progress_queue.get()
-	#		print(str(res))
+		try:
+			self.sqlite_progress_folder = Path(self.sqlite_folder_path).joinpath('progress')
+			self.sqlite_finished_folder = Path(self.sqlite_folder_path).joinpath('finished')
+			self.sqlite_progress_folder.mkdir(parents=True, exist_ok=True)
+			self.sqlite_finished_folder.mkdir(parents=True, exist_ok=True)
+		except Exception as e:
+			logging.exception('Failed to create folder structure! Will stop now')
+
+
+	async def check_progress(self):
+		logging.debug('Writing progress to %s' % self.progress_file_name)
+		with open(self.progress_file_name, 'a+', newline = '') as f:
+			f.write('\r\n')
+			while True:
+				try:
+					res = await asyncio.wait_for(self.progress_queue.get(), timeout=1)
+					f.write('%s \r\n' % str(res))
+				except asyncio.TimeoutError:
+					f.flush()
+					continue
+				except asyncio.CancelledError:
+					f.flush()
+					return
+				except Exception as e:
+					logging.debug('status file writer error! %s' % e)
+					try:
+						f.flush()
+					except:
+						pass
+					return
 
 	async def on_agent_connect(self, agent_id, agentinfo):
 		try:
@@ -134,29 +161,41 @@ class MultiplexorAutoStart(MultiplexorOperator):
 			if agentinfo is None:
 				return
 			logging.info(agentinfo)
-			await self.start_jackdaw_enum(agent_id, agentinfo)
+			self.collection_tasks[agent_id] = asyncio.create_task(self.start_jackdaw_enum(agent_id, agentinfo))
 
 		except:
 			traceback.print_exc()
 			#await self.logger.exception()
 
 	async def start_jackdaw_enum(self, agent_id, agentinfo):
-		logging.info('Starting Jackdaw enum on %s' % agent_id)
-		agentinfo_s = json.dumps(agentinfo)
-		self.agent_tracker[agent_id] = agentinfo
-		self.agent_info_tracker[agentinfo_s] = agent_id
+		try:
+			db_filename = 'jackdaw_%s.db' % datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+			db_file_path = Path(self.sqlite_progress_folder).joinpath(db_filename)
+			db_conn = 'sqlite:///%s' % (db_file_path)
+			create_db(db_conn)
 
-		collect = JackdawAutoCollect(agent_id, agentinfo, self.db_conn, parallel_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
-		self.collection_tasks[agent_id] = (asyncio.create_task(collect.run()), collect)
-		#self.scan_q.put((agent_id, agentinfo, self.db_conn, "START"))
+			logging.info('Starting Jackdaw enum on %s' % agent_id)
+			agentinfo_s = json.dumps(agentinfo)
+			self.agent_tracker[agent_id] = agentinfo
+			self.agent_info_tracker[agentinfo_s] = agent_id
+
+			collect = JackdawAutoCollect(agent_id, agentinfo, db_conn, parallel_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
+			await collect.run()
+
+			shutil.move(str(db_file_path), str(self.sqlite_finished_folder))
+			logging.info('DB file moved!')
+			if self.start_ui is True:
+				cmd = shlex.split('jackdaw --sql %s nest' % db_conn)
+				subprocess.run(cmd)
+
+		except Exception as e:
+			logging.exception('start_jackdaw_enum')
 
 	async def on_agent_disconnect(self, agent_id):
 		logging.info('Agent disconnected! %s' % agent_id)
 		#self.scan_q.put((agent_id, None, None, "STOP"))
 		if agent_id in self.collection_tasks:
-			await self.collection_tasks[agent_id][1].terminate()
-			await asyncio.sleep(1)
-			self.collection_tasks[agent_id][0].cancel()
+			self.collection_tasks[agent_id].cancel()
 		
 
 	async def on_plugin_start(self, agent_id, plugin_id):
@@ -176,9 +215,11 @@ class MultiplexorAutoStart(MultiplexorOperator):
 		logging.error('Failed to connect to server! Reason: %s' % reason)
 
 	async def on_run(self):
-		#self.progress_queue = asyncio.Queue()
-		#if self.progress_queue is not None:
-		#	asyncio.create_task(self.check_progress())
+		if self.progress_queue is None and self.progress_file_name is not None:
+			logging.debug('Creating progress queue')
+			self.progress_queue = asyncio.Queue()
+		if self.progress_file_name is not None:
+			asyncio.create_task(self.check_progress())
 		logging.info('Fetching agents')
 		agentids = await self.list_agents()
 		if len(agentids) == 0:
@@ -191,12 +232,17 @@ class MultiplexorAutoStart(MultiplexorOperator):
 					await self.start_jackdaw_enum(agent_id, agentinfo)
 
 def main():
+	import os
 	import argparse
 	parser = argparse.ArgumentParser(description='auto collector for MP')
 	#parser.add_argument('-v', '--verbose', action='count', default=0, help='Increase verbosity, can be stacked')
-	parser.add_argument('sql', help='SQL connection string in URL format')
+	#parser.add_argument('sql', help='SQL connection string in URL format')
+	parser.add_argument('sqlite_folder_path', help='A folder to store enumeration results in')
 	parser.add_argument('-m', '--multiplexor', default = 'ws://127.0.0.1:9999', help='multiplexor connection string in URL format')
-	parser.add_argument('-p', '--parallel_cnt', default = 10, type=int, help='agent count')
+	parser.add_argument('-p', '--parallel_cnt', default = len(os.sched_getaffinity(0)), type=int, help='agent count')
+	parser.add_argument('-o', '--progress-out-file', default = None, help='Filename to write progress to')
+	parser.add_argument('-s', '--start-ui', action='store_true', help='Automatically start jackdaw UI after successful enumeration')
+
 	args = parser.parse_args()
 
 	logging.basicConfig(level=logging.DEBUG)
@@ -207,9 +253,7 @@ def main():
 	logging.getLogger('websockets.protocol').setLevel(logging.ERROR)
 	logging.getLogger('aiosmb').setLevel(100)
 
-	create_db(args.sql)
-
-	mas = MultiplexorAutoStart(args.multiplexor, args.sql, parallel_cnt=args.parallel_cnt)
+	mas = MultiplexorAutoStart(args.multiplexor, args.sqlite_folder_path, parallel_cnt=args.parallel_cnt, progress_file_name = args.progress_out_file, start_ui = args.start_ui)
 	asyncio.run(mas.run())
 	
 

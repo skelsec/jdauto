@@ -41,6 +41,8 @@ StandardError=append:/opt/jdauto/stderr.log
 [Install]
 WantedBy=multi-user.target
 
+chmod +x /opt/mpservice/mpservice.sh
+chmod +x /opt/jdauto/jdautoservice.sh
 
 # initializing database
 jackdaw --sql sqlite:////opt/jdauto/test.db dbinit

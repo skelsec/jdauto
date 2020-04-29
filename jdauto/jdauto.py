@@ -46,7 +46,7 @@ class JackdawAutoCollect:
 		domains_raw = self.agentinfo.get('domains')
 		domains = domains_raw.split(' | ')
 		
-		logging.info('Client domain: %s' % domains[0])
+		self.logger.info('Client domain: %s' % domains[0])
 		return domains[0]
 
 	async def terminate(self):
@@ -68,21 +68,21 @@ class JackdawAutoCollect:
 			}
 			ldap_url = 'ldap+multiplexor-ntlm://{ds}/?proxytype=multiplexor&proxyhost={ms}&proxyport={mp}&proxyagentid={ai}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
 			smb_url = 'smb+multiplexor-ntlm://{ds}/?proxytype=multiplexor&proxyhost={ms}&proxyport={mp}&proxyagentid={ai}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
-			logging.info(ldap_url)
-			logging.info(smb_url)
+			self.logger.info(ldap_url)
+			self.logger.info(smb_url)
 			smb_mgr = SMBConnectionURL(smb_url)
 			ldap_mgr = MSLDAPURLDecoder(ldap_url)
 			
 			self.ldapenum = LDAPEnumeratorManager(self.db_conn, ldap_mgr, agent_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
-			logging.info('Enumerating LDAP')
+			self.logger.info('Enumerating LDAP')
 			self.ldapenum_task = asyncio.create_task(self.ldapenum.run())
 			
 			adifo_id = await self.ldapenum_task
 			if adifo_id is None:
 				raise Exception('LDAP enumeration failed!')
-			logging.info('ADInfo entry successfully created with ID %s' % adifo_id)
+			self.logger.info('ADInfo entry successfully created with ID %s' % adifo_id)
 			
-			logging.info('Enumerating SMB')
+			self.logger.info('Enumerating SMB')
 			self.smbenum = SMBGathererManager(smb_mgr, worker_cnt=self.parallel_cnt, progress_queue = self.progress_queue)
 			self.smbenum.gathering_type = ['all']
 			self.smbenum.db_conn = self.db_conn
@@ -119,7 +119,7 @@ class MultiplexorAutoStart(MultiplexorOperator):
 		self.plugin_tracker = {}
 		#self.db_conn = db_conn
 		self.sqlite_folder_path = sqlite_folder_path
-		self.parallel_cnt = None
+		self.parallel_cnt = parallel_cnt
 		self.sqlite_progress_folder = None
 		self.sqlite_finished_folder = None
 		self.start_ui = start_ui
@@ -253,6 +253,7 @@ def main():
 	logging.getLogger('websockets.protocol').setLevel(logging.ERROR)
 	logging.getLogger('aiosmb').setLevel(100)
 
+	
 	mas = MultiplexorAutoStart(args.multiplexor, args.sqlite_folder_path, parallel_cnt=args.parallel_cnt, progress_file_name = args.progress_out_file, start_ui = args.start_ui)
 	asyncio.run(mas.run())
 	

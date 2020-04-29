@@ -3,16 +3,20 @@ mkdir /opt/jdauto
 mkdir /opt/mpservice
 
 
-nano /opt/mpservice/mpservice.sh
+cat <<EOF > /opt/mpservice/mpservice.sh
 #!/bin/bash
 /usr/local/bin/multiplexor
+EOF
 
-nano /opt/jdauto/jdautoservice.sh
+cat <<EOF > /opt/jdauto/jdautoservice.sh
 #!/bin/bash
-/usr/local/bin/jdauto sqlite:////opt/jdauto/test.db ws://127.0.0.1:9999
+/usr/local/bin/jdauto /opt/shared/jackdaw -o /opt/shared/jackdaw/progress.txt
+EOF
 
+chmod +x /opt/mpservice/mpservice.sh
+chmod +x /opt/jdauto/jdautoservice.sh
 
-nano /etc/systemd/system/multiplexor.service 
+cat <<EOF > /etc/systemd/system/multiplexor.service 
 [Unit]
 Description=multiplexor service
 After=multi-user.target
@@ -24,9 +28,9 @@ ExecStart=/opt/mpservice/mpservice.sh
 
 [Install]
 WantedBy=multi-user.target
+EOF
 
-
-nano /etc/systemd/system/jdauto.service      
+cat <<EOF > /etc/systemd/system/jdauto.service      
 [Unit]
 Description=jackdaw auto collection service
 After=multi-user.target
@@ -40,17 +44,12 @@ StandardError=append:/opt/jdauto/stderr.log
 
 [Install]
 WantedBy=multi-user.target
+EOF
 
-chmod +x /opt/mpservice/mpservice.sh
-chmod +x /opt/jdauto/jdautoservice.sh
-
-# initializing database
-jackdaw --sql sqlite:////opt/jdauto/test.db dbinit
+systemctl enable multiplexor
+systemctl start multiplexor
 
 systemctl enable jdauto
-systemctl enable multiplexor
-
 systemctl start jdauto
-systemctl start multiplexor
 
 

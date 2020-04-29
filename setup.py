@@ -47,7 +47,7 @@ setup(
 	),
 	install_requires=[
 		'multiplexor>=0.0.8',
-		'jackdaw>=0.2.7',
+		'jackdaw>=0.2.9',
 		'aiosmb>=0.2.13',
 		'msldap>=0.2.14',
 		'pypykatz>=0.3.9',

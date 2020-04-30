@@ -25,6 +25,8 @@ cat <<EOF >> /etc/dhcp/dhcpd.conf
 
 subnet 10.0.0.0 netmask 255.255.255.0 {
  range 10.0.0.2 10.0.0.200;
+ default-lease-time 86400;
+ max-lease-time 86400;
 }
 EOF
 

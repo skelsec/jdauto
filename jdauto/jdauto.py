@@ -185,7 +185,7 @@ class MultiplexorAutoStart(MultiplexorOperator):
 			shutil.move(str(db_file_path), str(self.sqlite_finished_folder))
 			logging.info('DB file moved!')
 			if self.start_ui is True:
-				cmd = shlex.split('jackdaw --sql %s nest' % db_conn)
+				cmd = shlex.split('jackdaw --sql %s nest --ip 0.0.0.0 --port 0' % db_conn)
 				subprocess.run(cmd)
 
 		except Exception as e:

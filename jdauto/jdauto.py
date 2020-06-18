@@ -16,13 +16,14 @@ from msldap.commons.url import MSLDAPURLDecoder
 from msldap import logger as msldaplogger
 
 from jackdaw.dbmodel import *
-from jackdaw.gatherer.smb.smb import SMBGathererManager
-from jackdaw.gatherer.ldap.aioldap import LDAPEnumeratorManager
+from jackdaw.gatherer.gatherer import Gatherer
 import json
 import logging
 
 from aiosmb import logger as smblogger
 from msldap import logger as msldaplogger
+import multiprocessing
+from jackdaw.common.cpucount import get_cpu_count
 
 
 class JackdawAutoCollect:
@@ -73,24 +74,44 @@ class JackdawAutoCollect:
 			smb_mgr = SMBConnectionURL(smb_url)
 			ldap_mgr = MSLDAPURLDecoder(ldap_url)
 			
-			self.ldapenum = LDAPEnumeratorManager(self.db_conn, ldap_mgr, agent_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
-			self.logger.info('Enumerating LDAP')
-			self.ldapenum_task = asyncio.create_task(self.ldapenum.run())
-			
-			adifo_id = await self.ldapenum_task
-			if adifo_id is None:
-				raise Exception('LDAP enumeration failed!')
-			self.logger.info('ADInfo entry successfully created with ID %s' % adifo_id)
-			
-			self.logger.info('Enumerating SMB')
-			self.smbenum = SMBGathererManager(smb_mgr, worker_cnt=self.parallel_cnt, progress_queue = self.progress_queue)
-			self.smbenum.gathering_type = ['all']
-			self.smbenum.db_conn = self.db_conn
-			self.smbenum.target_ad = adifo_id
-			self.smbenum_task = asyncio.create_task(self.smbenum.run())
+			#self.ldapenum = LDAPEnumeratorManager(self.db_conn, ldap_mgr, agent_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
+			#self.logger.info('Enumerating LDAP')
+			#self.ldapenum_task = asyncio.create_task(self.ldapenum.run())
+			#
+			#adifo_id = await self.ldapenum_task
+			#if adifo_id is None:
+			#	raise Exception('LDAP enumeration failed!')
+			#self.logger.info('ADInfo entry successfully created with ID %s' % adifo_id)
+			#
+			#self.logger.info('Enumerating SMB')
+			#self.smbenum = SMBGathererManager(smb_mgr, worker_cnt=self.parallel_cnt, progress_queue = self.progress_queue)
+			#self.smbenum.gathering_type = ['all']
+			#self.smbenum.db_conn = self.db_conn
+			#self.smbenum.target_ad = adifo_id
+			#self.smbenum_task = asyncio.create_task(self.smbenum.run())
+			#
+			#await self.smbenum_task
 
-			await self.smbenum_task
+			work_dir = './workdir'
 
+			with multiprocessing.Pool() as mp_pool:
+				gatherer = Gatherer(
+					self.db_conn, 
+					work_dir, 
+					ldap_url, 
+					smb_url, 
+					ldap_worker_cnt=None, 
+					smb_worker_cnt=None, 
+					mp_pool=mp_pool, 
+					smb_gather_types=['all'], 
+					progress_queue=self.progress_queue, 
+					show_progress=False,
+					calc_edges=True,
+					dns=None
+				)
+				res, err = await gatherer.run()
+				if err is not None:
+					raise err
 			return True
 		except:
 			logging.exception('Failed to run scan!')
@@ -237,9 +258,9 @@ def main():
 	parser = argparse.ArgumentParser(description='auto collector for MP')
 	#parser.add_argument('-v', '--verbose', action='count', default=0, help='Increase verbosity, can be stacked')
 	#parser.add_argument('sql', help='SQL connection string in URL format')
-	parser.add_argument('sqlite_folder_path', help='A folder to store enumeration results in')
+	parser.add_argument('-q', '--sqlite_folder_path', default='./workdir', help='A folder to store enumeration results in')
 	parser.add_argument('-m', '--multiplexor', default = 'ws://127.0.0.1:9999', help='multiplexor connection string in URL format')
-	parser.add_argument('-p', '--parallel_cnt', default = len(os.sched_getaffinity(0)), type=int, help='agent count')
+	parser.add_argument('-p', '--parallel_cnt', default = get_cpu_count(), type=int, help='agent count')
 	parser.add_argument('-o', '--progress-out-file', default = None, help='Filename to write progress to')
 	parser.add_argument('-s', '--start-ui', action='store_true', help='Automatically start jackdaw UI after successful enumeration')
 
@@ -252,6 +273,7 @@ def main():
 	logging.getLogger('websockets.client').setLevel(logging.ERROR)
 	logging.getLogger('websockets.protocol').setLevel(logging.ERROR)
 	logging.getLogger('aiosmb').setLevel(100)
+	logging.getLogger('asysocks').setLevel(100)
 
 	
 	mas = MultiplexorAutoStart(args.multiplexor, args.sqlite_folder_path, parallel_cnt=args.parallel_cnt, progress_file_name = args.progress_out_file, start_ui = args.start_ui)

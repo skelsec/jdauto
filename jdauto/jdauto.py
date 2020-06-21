@@ -27,7 +27,7 @@ from jackdaw.common.cpucount import get_cpu_count
 
 
 class JackdawAutoCollect:
-	def __init__(self, agent_id, agentinfo, db_conn, parallel_cnt = None, progress_queue = None):
+	def __init__(self, agent_id, agentinfo, db_conn, socks_server_info, parallel_cnt = None, progress_queue = None):
 		self.progress_queue = progress_queue
 		self.agentinfo = agentinfo
 		self.agent_id = agent_id
@@ -37,6 +37,7 @@ class JackdawAutoCollect:
 		self.logger = logging.getLogger('jackdawautocollect.process')
 		self.parallel_cnt = parallel_cnt
 		self.domain_server = None
+		self.socks_server_info = socks_server_info
 
 		self.ldapenum = None
 		self.ldapenum_task = None
@@ -57,7 +58,6 @@ class JackdawAutoCollect:
 		if self.smbenum_task is not None:
 			await self.smbenum.terminate()
 			self.smbenum_task.cancel()
-		
 
 	async def gather(self):
 		try:
@@ -66,9 +66,11 @@ class JackdawAutoCollect:
 				'ms' : self.multiplexor_server,
 				'mp' : self.multiplexor_port,
 				'ai' : self.agent_id,
+				'sh' : self.socks_server_info['listen_ip'],
+				'sp' : self.socks_server_info['listen_port']
 			}
-			ldap_url = 'ldap+multiplexor-ntlm://{ds}/?proxytype=multiplexor&proxyhost={ms}&proxyport={mp}&proxyagentid={ai}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
-			smb_url = 'smb+multiplexor-ntlm://{ds}/?proxytype=multiplexor&proxyhost={ms}&proxyport={mp}&proxyagentid={ai}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
+			ldap_url = 'ldap+multiplexor-ntlm://{ds}/?proxytype=socks5&proxyhost={sh}&proxyport={sp}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
+			smb_url = 'smb+multiplexor-ntlm://{ds}/?proxytype=socks5&proxyhost={sh}&proxyport={sp}&authhost={ms}&authport={mp}&authagentid={ai}'.format(**info)
 			self.logger.info(ldap_url)
 			self.logger.info(smb_url)
 			smb_mgr = SMBConnectionURL(smb_url)
@@ -118,7 +120,7 @@ class JackdawAutoCollect:
 			return False
 
 	async def run(self):
-		self.domain_server = self.get_domain_server()
+		self.domain_server = self.get_domain_server()		
 		if self.domain_server is None:
 			logging.exception('Failed to get domain server!')
 		
@@ -200,7 +202,9 @@ class MultiplexorAutoStart(MultiplexorOperator):
 			self.agent_tracker[agent_id] = agentinfo
 			self.agent_info_tracker[agentinfo_s] = agent_id
 
-			collect = JackdawAutoCollect(agent_id, agentinfo, db_conn, parallel_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
+			socks_server_info = await self.start_socks5(agent_id)
+
+			collect = JackdawAutoCollect(agent_id, agentinfo, db_conn, socks_server_info, parallel_cnt=self.parallel_cnt, progress_queue=self.progress_queue)
 			await collect.run()
 
 			shutil.move(str(db_file_path), str(self.sqlite_finished_folder))

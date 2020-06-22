@@ -49,7 +49,7 @@ setup(
 		'multiplexor>=0.0.11',
 		'jackdaw>=0.2.18',
 		'aiosmb>=0.2.20',
-		'msldap>=0.3.8',
+		'msldap>=0.3.9',
 		'pypykatz>=0.3.9',
 	],
 	entry_points={
